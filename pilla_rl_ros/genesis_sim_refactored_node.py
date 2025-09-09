@@ -8,7 +8,6 @@ import pickle
 from importlib import metadata
 import torch
 
-
 import genesis as gs
 
 # from go2_env import Go2Env
@@ -28,6 +27,8 @@ from rclpy.node import Node
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Float32MultiArray
 from std_srvs.srv import SetBool, Trigger
+from sensor_msgs.msg import JointState, Imu
+from message_filters import Subscriber, TimeSynchronizer
 
 def quaternion_from_euler(roll, pitch, yaw):
     """
@@ -355,15 +356,14 @@ class GenesisSimNode(Node):
         
         # Use simpler QoS profile
         qos_profile = rclpy.qos.QoSProfile(depth=10)
-        
 
-        self.action_subscriber = self.create_subscription(
-            Float32MultiArray, 
-            '/robot_actions', 
-            self.action_callback, 
+        self.joint_command_subscriber = self.create_subscription(
+            JointState,
+            '/joint_commands',
+            self.joint_command_callback,
             qos_profile=qos_profile
         )
-        
+
         gs.init()
         env_cfg, obs_cfg, reward_cfg, command_cfg = get_cfgs()
 
@@ -407,17 +407,14 @@ class GenesisSimNode(Node):
         
         self.get_logger().info(f'Updated env commands: linear_x={msg.linear.x}, linear_y={msg.linear.y}, angular_z={msg.angular.z}')
 
-    def action_callback(self, msg):
-        # Handle incoming actions from RL policy
-        if len(msg.data) != 12:
-            self.get_logger().error(f'Expected 12 actions, but got {len(msg.data)}')
+    def joint_command_callback(self, msg):
+        # Handle incoming joint commands (if needed)
+        if len(msg.position) != 12:
+            self.get_logger().error(f'Expected 12 joint positions, but got {len(msg.position)}')
             return
-            
-        actions = torch.tensor(msg.data, device=gs.device, dtype=gs.tc_float).unsqueeze(0)
-        
-        # Step the simulation immediately when receiving actions
+        joint_positions = torch.tensor(msg.position, device=gs.device, dtype=gs.tc_float).unsqueeze(0)
         self.step_count += 1
-        obs, info = self.env.step(actions)
+        obs, info = self.env.step(joint_positions)
         
         # Publish the resulting observations
         obs_msg = Float32MultiArray()
@@ -426,7 +423,7 @@ class GenesisSimNode(Node):
         
         # Log progress
         if self.step_count % 50 == 0:  # Log every 50 steps
-            self.get_logger().info(f'Step {self.step_count}: obs_size={len(obs_msg.data)}, action_norm={torch.norm(actions).item():.3f}')
+            self.get_logger().info(f'Step {self.step_count}: obs_size={len(obs_msg.data)}, action_norm={torch.norm(joint_positions).item():.3f}')
 
 def main():
     rclpy.init()

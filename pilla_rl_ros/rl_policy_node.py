@@ -40,6 +40,8 @@ from rclpy.node import Node
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Float32MultiArray
 from std_srvs.srv import SetBool, Trigger
+from sensor_msgs.msg import JointState, Imu
+from message_filters import Subscriber, TimeSynchronizer
 
 class RLPolicyNode(Node):
     def __init__(self):
@@ -67,6 +69,13 @@ class RLPolicyNode(Node):
             '/robot_actions', 
             qos_profile=qos_profile
         )
+
+        self.joint_command_publisher = self.create_publisher(
+            JointState, 
+            '/joint_commands', 
+            qos_profile=qos_profile
+        )
+
         
         self.last_velocity = None
         self.last_observation = None
@@ -126,6 +135,11 @@ class RLPolicyNode(Node):
             action_msg = Float32MultiArray()
             action_msg.data = action.tolist()
             self.action_publisher.publish(action_msg)
+
+            joint_msg = JointState()
+            joint_msg.name = [f'joint_{i+1}' for i in range(len(action))]
+            joint_msg.position = action.tolist()
+            self.joint_command_publisher.publish(joint_msg)
             
         except Exception as e:
             self.get_logger().error(f'Error in observation callback: {str(e)}')

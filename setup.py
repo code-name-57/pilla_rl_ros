@@ -23,7 +23,7 @@ setup(
     entry_points={
         'console_scripts': [
             'rl_policy_node = pilla_rl_ros.rl_policy_node:main',
-            'genesis_sim_node = pilla_rl_ros.genesis_sim_node:main',
+            'genesis_sim_node = pilla_rl_ros.genesis_sim_refactored_node:main',
             'teleop_node = pilla_rl_ros.teleop_node:main'
         ],
     },
