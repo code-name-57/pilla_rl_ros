@@ -2,34 +2,7 @@
 
 from __future__ import print_function
 
-import argparse
-import os
-import pickle
-from importlib import metadata
 import torch
-
-try:
-    try:
-        if metadata.version("rsl-rl"):
-            raise ImportError
-    except metadata.PackageNotFoundError:
-        print(metadata.version("rsl-rl-lib"))
-        if metadata.version("rsl-rl-lib") != "2.3.3":
-            raise ImportError
-except (metadata.PackageNotFoundError, ImportError) as e:
-    raise ImportError("Please uninstall 'rsl_rl' and install 'rsl-rl-lib==2.2.4'.") from e
-from rsl_rl.runners import OnPolicyRunner
-
-import genesis as gs
-
-# from go2_env import Go2Env
-import sys
-import select
-import termios
-import tty
-
-
-import math
 import rclpy
 import numpy as np
 

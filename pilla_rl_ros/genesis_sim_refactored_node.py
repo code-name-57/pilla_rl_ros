@@ -2,20 +2,14 @@
 
 from __future__ import print_function
 
-import argparse
-import os
-import pickle
-from importlib import metadata
 import torch
 
 import genesis as gs
 
-# from go2_env import Go2Env
-import sys
-import select
-import termios
-import tty
-
+import torch
+import math
+import genesis as gs
+from genesis.utils.geom import quat_to_xyz, transform_by_quat, inv_quat, transform_quat_by_quat
 
 import math
 import rclpy
@@ -50,11 +44,6 @@ def quaternion_from_euler(roll, pitch, yaw):
     q[3] = sy * cp * cr - cy * sp * sr
 
     return q
-
-import torch
-import math
-import genesis as gs
-from genesis.utils.geom import quat_to_xyz, transform_by_quat, inv_quat, transform_quat_by_quat
 
 
 def gs_rand_float(lower, upper, shape, device):
