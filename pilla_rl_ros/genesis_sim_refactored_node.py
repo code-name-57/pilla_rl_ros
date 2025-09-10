@@ -280,40 +280,8 @@ class Go2Env:
 
         # update buffers
         self.episode_length_buf += 1
-        self.base_pos[:] = self.robot.get_pos()
-        self.base_quat[:] = self.robot.get_quat()
-        self.base_euler = quat_to_xyz(
-            transform_quat_by_quat(torch.ones_like(self.base_quat) * self.inv_base_init_quat, self.base_quat),
-            rpy=True,
-            degrees=True,
-        )
-        inv_base_quat = inv_quat(self.base_quat)
-        self.base_lin_vel[:] = transform_by_quat(self.robot.get_vel(), inv_base_quat)
-        self.base_ang_vel[:] = transform_by_quat(self.robot.get_ang(), inv_base_quat)
-        self.projected_gravity = transform_by_quat(self.global_gravity, inv_base_quat)
-        self.dof_pos[:] = self.robot.get_dofs_position(self.motors_dof_idx)
-        self.dof_vel[:] = self.robot.get_dofs_velocity(self.motors_dof_idx)
 
-
-        # compute observations
-        self.obs_buf = torch.cat(
-            [
-                self.base_ang_vel * self.obs_scales["ang_vel"],  # 3
-                self.projected_gravity,  # 3
-                self.commands * self.commands_scale,  # 3
-                (self.dof_pos - self.default_dof_pos) * self.obs_scales["dof_pos"],  # 12
-                self.dof_vel * self.obs_scales["dof_vel"],  # 12
-                self.actions,  # 12
-            ],
-            axis=-1,
-        )
-
-        self.last_actions[:] = self.actions[:]
-        self.last_dof_vel[:] = self.dof_vel[:]
-
-        self.extras["observations"]["critic"] = self.obs_buf
-
-        return self.obs_buf, self.extras
+        return self.get_observations()
 
     def get_observations(self):
         # Update robot state first
@@ -402,45 +370,7 @@ class GenesisSimNode(Node):
         # Reset environment and get initial observations
         obs, _ = self.env.reset()
 
-        imu_msg = Imu()
-        imu_msg.header.stamp = self.get_clock().now().to_msg()
-        imu_msg.orientation.w = self.env.base_quat[0,0].item()
-        imu_msg.orientation.x = self.env.base_quat[0,1].item()
-        imu_msg.orientation.y = self.env.base_quat[0,2].item()
-        imu_msg.orientation.z = self.env.base_quat[0,3].item()
-        imu_msg.angular_velocity.x = self.env.base_ang_vel[0,0].item()
-        imu_msg.angular_velocity.y = self.env.base_ang_vel[0,1].item()
-        imu_msg.angular_velocity.z = self.env.base_ang_vel[0,2].item()
-        imu_msg.linear_acceleration.x = self.env.projected_gravity[0,0].item()
-        imu_msg.linear_acceleration.y = self.env.projected_gravity[0,1].item()
-        imu_msg.linear_acceleration.z = self.env.projected_gravity[0,2].item()
-        self.imu_publisher.publish(imu_msg)
-
-        joint_state_msg = JointState()
-        joint_state_msg.header.stamp = self.get_clock().now().to_msg()
-        joint_state_msg.name = self.env.env_cfg["joint_names"]
-        joint_state_msg.position = obs[0, 9:21].cpu().numpy().tolist()  # Joint positions from observation
-        joint_state_msg.velocity = obs[0, 21:33].cpu().numpy().tolist()  # Joint velocities from observation
-        joint_state_msg.effort = []  # Effort not provided
-        self.joint_state_publisher.publish(joint_state_msg)
-
-
-        self.get_logger().info(f'Genesis sim initialized. Initial IMU data: {imu_msg}, Initial joint positions: {joint_state_msg.position}, Initial joint velocities: {joint_state_msg.velocity}')
-
-        # Remove the timer - we'll step only when receiving actions
-        # self.timer = self.create_timer(0.02, self.timer_callback)
-
-
-    def velocity_callback(self, msg):
-        # Handle incoming velocity commands and update environment commands
-        self.last_desired_velocity = msg
-        
-        # Update the environment's command buffer with the received velocity commands
-        self.env.commands[0, 0] = msg.linear.x   # linear_x
-        self.env.commands[0, 1] = msg.linear.y   # linear_y  
-        self.env.commands[0, 2] = msg.angular.z  # angular_z
-        
-        self.get_logger().info(f'Updated env commands: linear_x={msg.linear.x}, linear_y={msg.linear.y}, angular_z={msg.angular.z}')
+        self.publish_observations(obs)
 
     def joint_command_callback(self, msg):
         # Handle incoming joint commands (if needed)
@@ -450,7 +380,9 @@ class GenesisSimNode(Node):
         joint_positions = torch.tensor(msg.position, device=gs.device, dtype=gs.tc_float).unsqueeze(0)
         self.step_count += 1
         obs, info = self.env.step(joint_positions)
-        
+        self.publish_observations(obs)
+    
+    def publish_observations(self, obs):
         # Publish joint states
         joint_state_msg = JointState()
         joint_state_msg.header.stamp = self.get_clock().now().to_msg()
@@ -476,7 +408,7 @@ class GenesisSimNode(Node):
         self.imu_publisher.publish(imu_msg)
         # Log progress
         if self.step_count % 50 == 0:  # Log every 50 steps
-            self.get_logger().info(f'Step {self.step_count}: obs_size={len(obs[0].cpu().numpy().tolist())}, action_norm={torch.norm(joint_positions).item():.3f}')
+            self.get_logger().info(f'Step {self.step_count}: obs_size={len(obs[0].cpu().numpy().tolist())})')
 
 def main():
     rclpy.init()
