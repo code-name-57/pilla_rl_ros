@@ -347,6 +347,13 @@ class Go2Env:
         self.extras["observations"]["critic"] = self.obs_buf
         return self.obs_buf, self.extras
 
+    def get_imu_data(self):
+        orientation =  self.base_quat[0].cpu().numpy().tolist()  # [w, x, y, z]
+        angular_velocity = self.base_ang_vel.cpu().numpy().tolist()  # [x, y, z]
+        linear_acceleration = self.projected_gravity.cpu().numpy().tolist()  # [x, y, z]
+
+        return orientation, angular_velocity, linear_acceleration
+
     def get_privileged_observations(self):
         return None
 
@@ -371,7 +378,7 @@ class GenesisSimNode(Node):
         )
 
         self.imu_publisher = self.create_publisher(
-            Float32MultiArray,
+            Imu,
             '/imu/data',
             qos_profile=qos_profile
         )
@@ -394,9 +401,21 @@ class GenesisSimNode(Node):
         
         # Reset environment and get initial observations
         obs, _ = self.env.reset()
-        imu_msg = Float32MultiArray()
-        imu_msg.data = obs[0, 0:6].cpu().numpy().tolist()  # IMU data from observation
+
+        imu_msg = Imu()
+        imu_msg.header.stamp = self.get_clock().now().to_msg()
+        imu_msg.orientation.w = self.env.base_quat[0,0].item()
+        imu_msg.orientation.x = self.env.base_quat[0,1].item()
+        imu_msg.orientation.y = self.env.base_quat[0,2].item()
+        imu_msg.orientation.z = self.env.base_quat[0,3].item()
+        imu_msg.angular_velocity.x = self.env.base_ang_vel[0,0].item()
+        imu_msg.angular_velocity.y = self.env.base_ang_vel[0,1].item()
+        imu_msg.angular_velocity.z = self.env.base_ang_vel[0,2].item()
+        imu_msg.linear_acceleration.x = self.env.projected_gravity[0,0].item()
+        imu_msg.linear_acceleration.y = self.env.projected_gravity[0,1].item()
+        imu_msg.linear_acceleration.z = self.env.projected_gravity[0,2].item()
         self.imu_publisher.publish(imu_msg)
+
         joint_state_msg = JointState()
         joint_state_msg.header.stamp = self.get_clock().now().to_msg()
         joint_state_msg.name = self.env.env_cfg["joint_names"]
@@ -406,7 +425,7 @@ class GenesisSimNode(Node):
         self.joint_state_publisher.publish(joint_state_msg)
 
 
-        self.get_logger().info(f'Genesis sim initialized. Initial IMU data: {imu_msg.data}, Initial joint positions: {joint_state_msg.position}, Initial joint velocities: {joint_state_msg.velocity}')
+        self.get_logger().info(f'Genesis sim initialized. Initial IMU data: {imu_msg}, Initial joint positions: {joint_state_msg.position}, Initial joint velocities: {joint_state_msg.velocity}')
 
         # Remove the timer - we'll step only when receiving actions
         # self.timer = self.create_timer(0.02, self.timer_callback)
@@ -442,8 +461,18 @@ class GenesisSimNode(Node):
         self.joint_state_publisher.publish(joint_state_msg)
 
         # Publish IMU data
-        imu_msg = Float32MultiArray()
-        imu_msg.data = obs[0, 0:6].cpu().numpy().tolist()  # IMU data from observation
+        imu_msg = Imu()
+        imu_msg.header.stamp = self.get_clock().now().to_msg()
+        imu_msg.orientation.w = self.env.base_quat[0,0].item()
+        imu_msg.orientation.x = self.env.base_quat[0,1].item()
+        imu_msg.orientation.y = self.env.base_quat[0,2].item()
+        imu_msg.orientation.z = self.env.base_quat[0,3].item()
+        imu_msg.angular_velocity.x = self.env.base_ang_vel[0,0].item()
+        imu_msg.angular_velocity.y = self.env.base_ang_vel[0,1].item()
+        imu_msg.angular_velocity.z = self.env.base_ang_vel[0,2].item()
+        imu_msg.linear_acceleration.x = self.env.projected_gravity[0,0].item()
+        imu_msg.linear_acceleration.y = self.env.projected_gravity[0,1].item()
+        imu_msg.linear_acceleration.z = self.env.projected_gravity[0,2].item()
         self.imu_publisher.publish(imu_msg)
         # Log progress
         if self.step_count % 50 == 0:  # Log every 50 steps
