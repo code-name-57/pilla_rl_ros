@@ -334,12 +334,12 @@ class Go2Env:
         # compute observations
         self.obs_buf = torch.cat(
             [
-                self.base_ang_vel * self.obs_scales["ang_vel"],  # 3
-                self.projected_gravity,  # 3
-                self.commands * self.commands_scale,  # 3
-                (self.dof_pos - self.default_dof_pos) * self.obs_scales["dof_pos"],  # 12
-                self.dof_vel * self.obs_scales["dof_vel"],  # 12
-                self.actions,  # 12
+                self.base_ang_vel * self.obs_scales["ang_vel"],  # 3 - 0,1,2
+                self.projected_gravity,  # 3 - 3,4,5
+                self.commands * self.commands_scale,  # 3 - 6,7,8
+                (self.dof_pos - self.default_dof_pos) * self.obs_scales["dof_pos"],  # 12 - 9-20
+                self.dof_vel * self.obs_scales["dof_vel"],  # 12 - 21-32
+                self.actions,  # 12 - 33-44
             ],
             axis=-1,
         )
@@ -364,6 +364,18 @@ class GenesisSimNode(Node):
             qos_profile=qos_profile
         )
 
+        self.joint_state_publisher = self.create_publisher(
+            JointState,
+            '/joint_states',
+            qos_profile=qos_profile
+        )
+
+        self.imu_publisher = self.create_publisher(
+            Float32MultiArray,
+            '/imu/data',
+            qos_profile=qos_profile
+        )
+
         gs.init()
         env_cfg, obs_cfg, reward_cfg, command_cfg = get_cfgs()
 
@@ -376,22 +388,26 @@ class GenesisSimNode(Node):
             show_viewer=True,
         )
 
-        self.observation_publisher = self.create_publisher(
-            Float32MultiArray, 
-            'robot_observations', 
-            qos_profile=qos_profile
-        )
+
         self.last_desired_velocity = Twist()
         self.step_count = 0
         
         # Reset environment and get initial observations
         obs, _ = self.env.reset()
-        obs_msg = Float32MultiArray()
-        obs_msg.data = obs[0].cpu().numpy().tolist()
-        self.observation_publisher.publish(obs_msg)
-        
-        self.get_logger().info(f'Genesis sim initialized. Initial obs size: {len(obs_msg.data)}')
-        
+        imu_msg = Float32MultiArray()
+        imu_msg.data = obs[0, 0:6].cpu().numpy().tolist()  # IMU data from observation
+        self.imu_publisher.publish(imu_msg)
+        joint_state_msg = JointState()
+        joint_state_msg.header.stamp = self.get_clock().now().to_msg()
+        joint_state_msg.name = self.env.env_cfg["joint_names"]
+        joint_state_msg.position = obs[0, 9:21].cpu().numpy().tolist()  # Joint positions from observation
+        joint_state_msg.velocity = obs[0, 21:33].cpu().numpy().tolist()  # Joint velocities from observation
+        joint_state_msg.effort = []  # Effort not provided
+        self.joint_state_publisher.publish(joint_state_msg)
+
+
+        self.get_logger().info(f'Genesis sim initialized. Initial IMU data: {imu_msg.data}, Initial joint positions: {joint_state_msg.position}, Initial joint velocities: {joint_state_msg.velocity}')
+
         # Remove the timer - we'll step only when receiving actions
         # self.timer = self.create_timer(0.02, self.timer_callback)
 
@@ -416,14 +432,22 @@ class GenesisSimNode(Node):
         self.step_count += 1
         obs, info = self.env.step(joint_positions)
         
-        # Publish the resulting observations
-        obs_msg = Float32MultiArray()
-        obs_msg.data = obs[0].cpu().numpy().tolist()
-        self.observation_publisher.publish(obs_msg)
-        
+        # Publish joint states
+        joint_state_msg = JointState()
+        joint_state_msg.header.stamp = self.get_clock().now().to_msg()
+        joint_state_msg.name = self.env.env_cfg["joint_names"]
+        joint_state_msg.position = obs[0, 9:21].cpu().numpy().tolist()  # Joint positions from observation
+        joint_state_msg.velocity = obs[0, 21:33].cpu().numpy().tolist()  # Joint velocities from observation
+        joint_state_msg.effort = []  # Effort not provided
+        self.joint_state_publisher.publish(joint_state_msg)
+
+        # Publish IMU data
+        imu_msg = Float32MultiArray()
+        imu_msg.data = obs[0, 0:6].cpu().numpy().tolist()  # IMU data from observation
+        self.imu_publisher.publish(imu_msg)
         # Log progress
         if self.step_count % 50 == 0:  # Log every 50 steps
-            self.get_logger().info(f'Step {self.step_count}: obs_size={len(obs_msg.data)}, action_norm={torch.norm(joint_positions).item():.3f}')
+            self.get_logger().info(f'Step {self.step_count}: obs_size={len(obs[0].cpu().numpy().tolist())}, action_norm={torch.norm(joint_positions).item():.3f}')
 
 def main():
     rclpy.init()

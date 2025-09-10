@@ -41,7 +41,7 @@ from sensor_msgs.msg import Joy
 from std_msgs.msg import Float32MultiArray
 from std_srvs.srv import SetBool, Trigger
 from sensor_msgs.msg import JointState, Imu
-from message_filters import Subscriber, TimeSynchronizer
+from message_filters import Subscriber, TimeSynchronizer, ApproximateTimeSynchronizer
 
 class RLPolicyNode(Node):
     def __init__(self):
@@ -57,28 +57,37 @@ class RLPolicyNode(Node):
             qos_profile=qos_profile
         )
 
-        self.observation_subscriber = self.create_subscription(
-            Float32MultiArray, 
-            '/robot_observations', 
-            self.observation_callback, 
-            qos_profile=qos_profile
-        )
-        
-        self.action_publisher = self.create_publisher(
-            Float32MultiArray, 
-            '/robot_actions', 
-            qos_profile=qos_profile
-        )
-
         self.joint_command_publisher = self.create_publisher(
             JointState, 
             '/joint_commands', 
             qos_profile=qos_profile
         )
 
+        self.joint_state_subscriber = Subscriber(self,
+            JointState, 
+            '/joint_states', 
+            qos_profile=qos_profile
+        )
+
+        self.imu_subscriber = Subscriber(self,
+            Float32MultiArray, 
+            '/imu/data', 
+            qos_profile=qos_profile
+        )
+
+        queue_size = 10
+        subscribers = [self.joint_state_subscriber, self.imu_subscriber]
+
+        # Time synchronizer to ensure joint state and IMU data are processed
+        # together
+        self.sync = ApproximateTimeSynchronizer(subscribers, queue_size, slop=0.1, allow_headerless=True)
+        self.sync.registerCallback(self._tick)
+
+
         
         self.last_velocity = None
         self.last_observation = None
+        self.last_actions = np.zeros(12, dtype=np.float32)
         self.action_count = 0
         self.policy = None
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -91,14 +100,23 @@ class RLPolicyNode(Node):
         self.get_logger().debug(f'Received velocity command: linear_x={msg.linear.x}, linear_y={msg.linear.y}, angular_z={msg.angular.z}')
         self.last_velocity = msg
 
-    def observation_callback(self, msg):
+    def _tick(self, joint_state_msg, imu: Float32MultiArray):
+        # This function is called when both joint state and IMU messages are received
+        # It can be used to update internal state if needed
+        pass
         if self.policy is None:
             self.get_logger().warn('Policy not loaded yet, skipping observation')
             return
             
-        self.last_observation = msg.data
+        self.last_observation = np.zeros(45, dtype=np.float32)
+
+        self.last_observation[0:6] = imu.data[0:6]  # Assuming imu.data is a list of floats
+
+        self.last_observation[9:21] = joint_state_msg.position[:12]  # First 12 joint positions
+        self.last_observation[21:33] = joint_state_msg.velocity[:12]  # First 12 joint velocities
+
         self.action_count += 1
-        self.get_logger().debug(f'Array type: {type(msg.data)}, length: {len(msg.data)}')
+
         # Include velocity commands in observation if available
         if self.last_velocity is not None:
             # Append velocity commands to observation
@@ -112,6 +130,8 @@ class RLPolicyNode(Node):
             self.last_observation[7] = velocity_data[1]
             self.last_observation[8] = velocity_data[2]
 
+        self.last_observation[33:45] = self.last_actions
+
         try:
             obs_tensor = torch.tensor(self.last_observation, dtype=torch.float32, device=self.device).unsqueeze(0)
             
@@ -123,6 +143,7 @@ class RLPolicyNode(Node):
             with torch.no_grad():
                 action = self.policy(obs_tensor).squeeze(0).cpu().numpy()  # Move to CPU for ROS message
             
+            self.last_actions = action
             # Check action size  
             if len(action) != 12:
                 self.get_logger().error(f'Wrong action size: expected 12, got {len(action)}')
@@ -132,9 +153,9 @@ class RLPolicyNode(Node):
             if self.action_count % 50 == 0:  # Log every 50th action
                 self.get_logger().info(f'Action #{self.action_count}: [{action[0]:.3f}, {action[1]:.3f}, ...] obs_size: {obs_tensor.shape[1]}')
             
-            action_msg = Float32MultiArray()
-            action_msg.data = action.tolist()
-            self.action_publisher.publish(action_msg)
+            # action_msg = Float32MultiArray()
+            # action_msg.data = action.tolist()
+            # self.action_publisher.publish(action_msg)
 
             joint_msg = JointState()
             joint_msg.name = [f'joint_{i+1}' for i in range(len(action))]
@@ -143,6 +164,7 @@ class RLPolicyNode(Node):
             
         except Exception as e:
             self.get_logger().error(f'Error in observation callback: {str(e)}')
+            
 
     def load_policy(self, policy_path):
         try:
