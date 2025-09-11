@@ -95,12 +95,10 @@ def get_cfgs():
 
 
 class Go2Env:
-    def __init__(self, num_envs, env_cfg, obs_cfg, reward_cfg, command_cfg, show_viewer=False):
+    def __init__(self, num_envs, env_cfg, show_viewer=False):
         self.num_envs = num_envs
         self.num_actions = env_cfg["num_actions"]
-        self.device = gs.device
 
-        self.simulate_action_latency = False  # Disable for better policy testing
         self.dt = 0.02  # control frequency on real robot is 50hz
 
         self.env_cfg = env_cfg
@@ -214,6 +212,7 @@ class Go2Env:
         # Update robot state first
         self.base_pos[:] = self.robot.get_pos()
         self.base_quat[:] = self.robot.get_quat()
+
         self.base_euler = quat_to_xyz(
             transform_quat_by_quat(torch.ones_like(self.base_quat) * self.inv_base_init_quat, self.base_quat),
             rpy=True,
@@ -254,14 +253,11 @@ class GenesisSimNode(Node):
         )
 
         gs.init()
-        env_cfg, obs_cfg, reward_cfg, command_cfg = get_cfgs()
+        env_cfg, _, _, _ = get_cfgs()
 
         self.env = Go2Env(
             num_envs=1,
             env_cfg=env_cfg,
-            obs_cfg=obs_cfg,
-            reward_cfg=reward_cfg,
-            command_cfg=command_cfg,
             show_viewer=True,
         )
 
