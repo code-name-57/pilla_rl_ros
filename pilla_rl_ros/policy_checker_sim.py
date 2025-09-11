@@ -231,7 +231,7 @@ def main():
             elif step_count < 500:  # Next 6 seconds: forward
                 sim.set_commands(1.0, 0.0, 0.0) 
             elif step_count < 650:  # Next 3 seconds: turn
-                sim.set_commands(0.5, 0.0, 0.5)
+                sim.set_commands(0.0, 0.0, 0.5)
             else:  # Rest: stationary
                 sim.set_commands(0.0, 0.0, 0.0)
             

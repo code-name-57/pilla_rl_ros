@@ -161,7 +161,7 @@ class RLPolicyNode(Node):
     def _tick(self, joint_state_msg, imu: Imu):
         # This function is called when both joint state and IMU messages are received
         # It can be used to update internal state if needed
-        pass
+        
         if self.policy is None:
             self.get_logger().warn('Policy not loaded yet, skipping observation')
             return
@@ -170,9 +170,10 @@ class RLPolicyNode(Node):
 
         # self.last_observation[0:6] = imu.data[0:6]  # Assuming imu.data is a list of floats
         base_ang_vel = imu.angular_velocity
-        self.last_observation[0] = base_ang_vel.x * 0.25
-        self.last_observation[1] = base_ang_vel.y * 0.25
-        self.last_observation[2] = base_ang_vel.z * 0.25
+        self.last_observation[0] = base_ang_vel.x * self.obs_cfg["obs_scales"]["ang_vel"]
+        self.last_observation[1] = base_ang_vel.y * self.obs_cfg["obs_scales"]["ang_vel"]
+        self.last_observation[2] = base_ang_vel.z * self.obs_cfg["obs_scales"]["ang_vel"]
+
 
         projected_gravity = imu.linear_acceleration
         self.last_observation[3:6] = projected_gravity.x, projected_gravity.y, projected_gravity.z
@@ -194,12 +195,23 @@ class RLPolicyNode(Node):
 
         # Include velocity commands in observation if available
         if self.last_velocity is not None:
+            # Clip velocity commands to their respective ranges
+            clipped_linear_x = np.clip(self.last_velocity.linear.x, 
+                                      self.command_cfg["lin_vel_x_range"][0], 
+                                      self.command_cfg["lin_vel_x_range"][1])
+            clipped_linear_y = np.clip(self.last_velocity.linear.y,
+                                      self.command_cfg["lin_vel_y_range"][0],
+                                      self.command_cfg["lin_vel_y_range"][1])
+            clipped_angular_z = np.clip(self.last_velocity.angular.z,
+                                       self.command_cfg["ang_vel_range"][0],
+                                       self.command_cfg["ang_vel_range"][1])
             # Append velocity commands to observation
             velocity_data = [
-                self.last_velocity.linear.x * 2.0,
-                self.last_velocity.linear.y * 2.0, 
-                self.last_velocity.angular.z * 0.25
+                clipped_linear_x * self.obs_cfg["obs_scales"]["lin_vel"],
+                clipped_linear_y * self.obs_cfg["obs_scales"]["lin_vel"],
+                clipped_angular_z * self.obs_cfg["obs_scales"]["ang_vel"]
             ]
+            
             # velocity_data = np.array(velocity_data, dtype=np.float32)
             self.last_observation[6] = velocity_data[0]
             self.last_observation[7] = velocity_data[1]
@@ -216,25 +228,27 @@ class RLPolicyNode(Node):
                 return
                 
             with torch.no_grad():
-                action = self.policy(obs_tensor).squeeze(0).cpu().numpy()  # Move to CPU for ROS message
-            
-            self.last_actions = action
-            # Check action size  
-            if len(action) != 12:
-                self.get_logger().error(f'Wrong action size: expected 12, got {len(action)}')
+                actions = self.policy(obs_tensor)   
+                # Scale actions according to following calculations
+                clipped_actions = torch.clip(actions, -self.env_cfg["clip_actions"], self.env_cfg["clip_actions"]).squeeze(0).cpu().numpy()
+                target_dof_pos_cpu = clipped_actions * self.env_cfg["action_scale"] + default_positions
+
+            # Check action size
+            if len(target_dof_pos_cpu) != 12:
+                self.get_logger().error(f'Wrong action size: expected 12, got {len(target_dof_pos_cpu)}')
                 return
-                
+                    
             # Log less frequently to reduce noise
             if self.action_count % 50 == 0:  # Log every 50th action
-                self.get_logger().info(f'Action #{self.action_count}: [{action[0]:.3f}, {action[1]:.3f}, ...] obs_size: {obs_tensor.shape[1]}')
+                self.get_logger().info(f'Action #{self.action_count}: [{target_dof_pos_cpu[0]:.3f}, {target_dof_pos_cpu[1]:.3f}, ...] obs_size: {obs_tensor.shape[1]}')
             
-            # action_msg = Float32MultiArray()
-            # action_msg.data = action.tolist()
-            # self.action_publisher.publish(action_msg)
 
+
+            # Update last_actions for next iteration
+            self.last_actions = target_dof_pos_cpu
             joint_msg = JointState()
-            joint_msg.name = [f'joint_{i+1}' for i in range(len(action))]
-            joint_msg.position = action.tolist()
+            joint_msg.name = [f'joint_{i+1}' for i in range(len(target_dof_pos_cpu))]
+            joint_msg.position = target_dof_pos_cpu.tolist()
             self.joint_command_publisher.publish(joint_msg)
             
         except Exception as e:

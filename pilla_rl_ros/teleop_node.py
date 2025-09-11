@@ -61,7 +61,7 @@ class Teleop(Node):
 
         self.declare_parameter("gait/swing_height", 0)
         self.declare_parameter("gait/nominal_height", 0)
-        self.declare_parameter("speed", 0.5)
+        self.declare_parameter("speed", 1.0)
         self.declare_parameter("turn", 1.0)
         
         self.swing_height = self.get_parameter("gait/swing_height").value
