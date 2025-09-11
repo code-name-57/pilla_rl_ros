@@ -2,34 +2,7 @@
 
 from __future__ import print_function
 
-import argparse
-import os
-import pickle
-from importlib import metadata
 import torch
-
-try:
-    try:
-        if metadata.version("rsl-rl"):
-            raise ImportError
-    except metadata.PackageNotFoundError:
-        print(metadata.version("rsl-rl-lib"))
-        if metadata.version("rsl-rl-lib") != "2.3.3":
-            raise ImportError
-except (metadata.PackageNotFoundError, ImportError) as e:
-    raise ImportError("Please uninstall 'rsl_rl' and install 'rsl-rl-lib==2.2.4'.") from e
-from rsl_rl.runners import OnPolicyRunner
-
-import genesis as gs
-
-# from go2_env import Go2Env
-import sys
-import select
-import termios
-import tty
-
-
-import math
 import rclpy
 import numpy as np
 
@@ -70,11 +43,10 @@ class RLPolicyNode(Node):
         )
 
         self.imu_subscriber = Subscriber(self,
-            Float32MultiArray, 
+            Imu, 
             '/imu/data', 
             qos_profile=qos_profile
         )
-
         queue_size = 10
         subscribers = [self.joint_state_subscriber, self.imu_subscriber]
 
@@ -100,7 +72,7 @@ class RLPolicyNode(Node):
         self.get_logger().debug(f'Received velocity command: linear_x={msg.linear.x}, linear_y={msg.linear.y}, angular_z={msg.angular.z}')
         self.last_velocity = msg
 
-    def _tick(self, joint_state_msg, imu: Float32MultiArray):
+    def _tick(self, joint_state_msg, imu: Imu):
         # This function is called when both joint state and IMU messages are received
         # It can be used to update internal state if needed
         pass
@@ -110,7 +82,15 @@ class RLPolicyNode(Node):
             
         self.last_observation = np.zeros(45, dtype=np.float32)
 
-        self.last_observation[0:6] = imu.data[0:6]  # Assuming imu.data is a list of floats
+        # self.last_observation[0:6] = imu.data[0:6]  # Assuming imu.data is a list of floats
+        base_ang_vel = imu.angular_velocity
+        self.last_observation[0] = base_ang_vel.x * 0.25
+        self.last_observation[1] = base_ang_vel.y * 0.25
+        self.last_observation[2] = base_ang_vel.z * 0.25
+
+        projected_gravity = imu.linear_acceleration
+        self.last_observation[3:6] = projected_gravity.x, projected_gravity.y, projected_gravity.z
+
 
         self.last_observation[9:21] = joint_state_msg.position[:12]  # First 12 joint positions
         self.last_observation[21:33] = joint_state_msg.velocity[:12]  # First 12 joint velocities
