@@ -5,6 +5,7 @@ from __future__ import print_function
 import torch
 import rclpy
 import numpy as np
+from pathlib import Path
 
 # from champ_msgs.msg import Pose as PoseLite
 from geometry_msgs.msg import Pose as Pose
@@ -65,7 +66,8 @@ class RLPolicyNode(Node):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         # Load policy after setting up publishers/subscribers
-        self.load_policy('src/pilla_rl_ros/pilla_rl_ros/policy.jit')
+        
+        self.load_policy(f'pilla_rl_ros/policy.jit')
 
     def velocity_callback(self, msg):
         # Currently not used, but could be integrated into observation if needed
