@@ -372,8 +372,8 @@ class GenesisSimNode(Node):
         joint_state_msg = JointState()
         joint_state_msg.header.stamp = self.get_clock().now().to_msg()
         joint_state_msg.name = self.env.env_cfg["joint_names"]
-        joint_state_msg.position = obs[0, 9:21].cpu().numpy().tolist()  # Joint positions from observation
-        joint_state_msg.velocity = obs[0, 21:33].cpu().numpy().tolist()  # Joint velocities from observation
+        joint_state_msg.position = self.env.dof_pos[0].cpu().numpy().tolist()  # Joint positions from environment
+        joint_state_msg.velocity = self.env.dof_vel[0].cpu().numpy().tolist()  # Joint velocities from environment
         joint_state_msg.effort = []  # Effort not provided
         self.joint_state_publisher.publish(joint_state_msg)
 
