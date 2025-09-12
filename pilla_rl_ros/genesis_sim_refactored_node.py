@@ -10,6 +10,7 @@ import torch
 import math
 import genesis as gs
 from genesis.utils.geom import quat_to_xyz, transform_by_quat, inv_quat, transform_quat_by_quat
+from genesis.sensors.imu import IMUOptions
 
 import rclpy
 from rclpy.node import Node
@@ -125,6 +126,7 @@ class Go2Env:
         # add plain
         self.scene.add_entity(gs.morphs.URDF(file="urdf/plane/plane.urdf", fixed=True))
 
+
         # add robot
         self.base_init_pos = torch.tensor(self.env_cfg["base_init_pos"], device=gs.device)
         self.base_init_quat = torch.tensor(self.env_cfg["base_init_quat"], device=gs.device)
@@ -136,6 +138,9 @@ class Go2Env:
                 quat=self.base_init_quat.cpu().numpy(),
             ),
         )
+        base_link = self.robot.get_link("base")
+        self.imu_sensor = self.scene.add_sensor(IMUOptions(entity_idx=self.robot.idx, link_idx_local=base_link.idx_local))
+
 
         # build
         self.scene.build(n_envs=num_envs)
@@ -306,6 +311,7 @@ class GenesisSimNode(Node):
         # Log progress
         if self.step_count % 50 == 0:  # Log every 50 steps
             self.get_logger().info(f'Step {self.step_count}')
+            self.get_logger().info(f'IMU: {self.env.imu_sensor.read()}')
 
 def main():
     rclpy.init()
