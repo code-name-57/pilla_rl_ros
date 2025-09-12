@@ -174,10 +174,16 @@ class RLPolicyNode(Node):
         self.last_observation[1] = base_ang_vel.y * self.obs_cfg["obs_scales"]["ang_vel"]
         self.last_observation[2] = base_ang_vel.z * self.obs_cfg["obs_scales"]["ang_vel"]
 
+        quat_I = imu.orientation
+        quat_array = np.array([quat_I.w, quat_I.x, quat_I.y, quat_I.z])
 
-        projected_gravity = imu.linear_acceleration
-        self.last_observation[3:6] = projected_gravity.x, projected_gravity.y, projected_gravity.z
-
+        # Convert quaternion to rotation matrix
+        # (transpose for body to inertial frame)
+        R_BI = self.quat_to_rot_matrix(quat_array).T
+        gravity_b = np.matmul(R_BI, np.array([0.0, 0.0, -1.0]))
+        # projected_gravity = imu.linear_acceleration
+        # self.last_observation[3:6] = projected_gravity.x, projected_gravity.y, projected_gravity.z
+        self.last_observation[3:6] = gravity_b
 
         # Calculate default joint positions in the correct order
         default_positions = []
@@ -270,7 +276,30 @@ class RLPolicyNode(Node):
         except Exception as e:
             self.get_logger().error(f'Failed to load policy from {policy_path}: {str(e)}')
             self.policy = None
+            
+    def quat_to_rot_matrix(self, quat: np.ndarray) -> np.ndarray:
+        """Convert input quaternion to rotation matrix.
 
+        Args:
+            quat (np.ndarray): Input quaternion (w, x, y, z).
+
+        Returns:
+            np.ndarray: A 3x3 rotation matrix.
+        """
+        q = np.array(quat, dtype=np.float64, copy=True)
+        nq = np.dot(q, q)
+        if nq < 1e-10:
+            return np.identity(3)
+        q *= np.sqrt(2.0 / nq)
+        q = np.outer(q, q)
+        return np.array(
+            (
+                (1.0 - q[2, 2] - q[3, 3], q[1, 2] - q[3, 0], q[1, 3] + q[2, 0]),
+                (q[1, 2] + q[3, 0], 1.0 - q[1, 1] - q[3, 3], q[2, 3] - q[1, 0]),
+                (q[1, 3] - q[2, 0], q[2, 3] + q[1, 0], 1.0 - q[1, 1] - q[2, 2]),
+            ),
+            dtype=np.float64,
+        )
 
 
 def main():

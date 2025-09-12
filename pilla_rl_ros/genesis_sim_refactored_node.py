@@ -106,7 +106,7 @@ class Go2Env:
 
         # create scene
         self.scene = gs.Scene(
-            sim_options=gs.options.SimOptions(dt=self.dt, substeps=2),
+            sim_options=gs.options.SimOptions(dt=self.dt, substeps=2, gravity=(0.0, 0.0, -9.81)),
             viewer_options=gs.options.ViewerOptions(
                 max_FPS=int(0.5 / self.dt),
                 camera_pos=(2.0, 0.0, 2.5),
@@ -139,7 +139,7 @@ class Go2Env:
             ),
         )
         base_link = self.robot.get_link("base")
-        self.imu_sensor = self.scene.add_sensor(IMUOptions(entity_idx=self.robot.idx, link_idx_local=base_link.idx_local))
+        self.imu_sensor = self.scene.add_sensor(IMUOptions(entity_idx=self.robot.idx, link_idx_local=base_link.idx_local,read_delay=0.02*2))
 
 
         # build
@@ -253,9 +253,17 @@ class GenesisSimNode(Node):
 
         self.imu_publisher = self.create_publisher(
             Imu,
-            '/imu/data',
+            '/imu/data_rl',
             qos_profile=qos_profile
         )
+
+        self.imu_raw_publisher = self.create_publisher(
+            Imu,
+            '/imu/data_raw',
+            qos_profile=qos_profile
+        )
+
+         # Initialize Genesis and environment
 
         gs.init()
         env_cfg, _, _, _ = get_cfgs()
@@ -267,18 +275,27 @@ class GenesisSimNode(Node):
         )
 
 
+
+
         self.step_count = 0
         
         # Reset environment and get initial observations
         self.env.reset()
-
+        while self.step_count < 20:
+            self.env.step(torch.zeros((1,12), device=gs.device))
+            self.step_count += 1
+        
         self.publish_observations()
+
+
+
 
     def joint_command_callback(self, msg):
         # Handle incoming joint commands (if needed)
         if len(msg.position) != 12:
             self.get_logger().error(f'Expected 12 joint positions, but got {len(msg.position)}')
             return
+        # joint_positions = torch.zeros((1,12), device=gs.device)
         joint_positions = torch.tensor(msg.position, device=gs.device, dtype=gs.tc_float).unsqueeze(0)
         self.step_count += 1
         self.env.step(joint_positions)
@@ -309,6 +326,18 @@ class GenesisSimNode(Node):
         imu_msg.linear_acceleration.z = self.env.projected_gravity[0,2].item()
         self.imu_publisher.publish(imu_msg)
         # Log progress
+
+        imu_reading = self.env.imu_sensor.read_ground_truth()
+        imu_msg_raw = Imu()
+        imu_msg_raw.header.stamp = self.get_clock().now().to_msg()
+        imu_msg_raw.angular_velocity.x = imu_reading['ang_vel'][0].item()
+        imu_msg_raw.angular_velocity.y = imu_reading['ang_vel'][1].item()
+        imu_msg_raw.angular_velocity.z = imu_reading['ang_vel'][2].item()
+        imu_msg_raw.linear_acceleration.x = imu_reading['lin_acc'][0].item()
+        imu_msg_raw.linear_acceleration.y = imu_reading['lin_acc'][1].item()
+        imu_msg_raw.linear_acceleration.z = -imu_reading['lin_acc'][2].item()
+        self.imu_raw_publisher.publish(imu_msg_raw)
+
         if self.step_count % 50 == 0:  # Log every 50 steps
             self.get_logger().info(f'Step {self.step_count}')
             self.get_logger().info(f'IMU: {self.env.imu_sensor.read()}')
