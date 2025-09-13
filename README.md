@@ -171,33 +171,22 @@ Launches the complete system with all necessary nodes:
 
 ## Usage
 
-### Launch Complete System
-```bash
-ros2 launch pilla_rl_ros pilla_rl.launch.py
+### Build
+**CPU**
+```
+docker build --build-arg GPU_BUILD="false" -t my_ros2_app .
+```
+**GPU**
+```
+docker build -t my_ros2_app .
 ```
 
-### Launch Individual Nodes
-```bash
-# Terminal 1: Simulation
-ros2 run pilla_rl_ros genesis_sim_node
+### Launch
 
-# Terminal 2: RL Policy  
-ros2 run pilla_rl_ros rl_policy_node
-
-# Terminal 3: Teleop (with joystick connected)
-ros2 run pilla_rl_ros teleop_node
-
-# Terminal 4: Joy node
-ros2 run joy joy_node
+**GPU**
 ```
-
-### Test the System
-```bash
-# Test policy without ROS
-python3 src/pilla_rl_ros/pilla_rl_ros/policy_checker_sim.py
-
-# Test ROS node communication
-python3 src/pilla_rl_ros/pilla_rl_ros/test_ros_nodes.py
+xhost +local:root
+docker run -it --rm --gpus all -e DISPLAY=$DISPLAY -e LOCAL_USER_ID="$(id -u)" -v /dev/dri:/dev/dri -v /tmp/.X11-unix/:/tmp/.X11-unix docker.io/library/my_ros2_app 
 ```
 
 ## Dependencies
