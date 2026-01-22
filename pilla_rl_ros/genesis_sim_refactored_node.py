@@ -272,46 +272,20 @@ class Go2Env:
         return obs, info
 
     def step(self, actions):
-        self.actions = torch.clip(actions, -self.env_cfg["clip_actions"], self.env_cfg["clip_actions"])
-        exec_actions = self.last_actions if self.simulate_action_latency else self.actions
-        target_dof_pos = exec_actions * self.env_cfg["action_scale"] + self.default_dof_pos
+        # self.actions = torch.clip(actions, -self.env_cfg["clip_actions"], self.env_cfg["clip_actions"])
+        # exec_actions = self.last_actions if self.simulate_action_latency else self.actions
+        # target_dof_pos = exec_actions * self.env_cfg["action_scale"] + self.default_dof_pos
+        target_dof_pos = actions
         self.robot.control_dofs_position(target_dof_pos, self.motors_dof_idx)
         self.scene.step()
 
         # update buffers
         self.episode_length_buf += 1
-        self.base_pos[:] = self.robot.get_pos()
-        self.base_quat[:] = self.robot.get_quat()
-        self.base_euler = quat_to_xyz(
-            transform_quat_by_quat(torch.ones_like(self.base_quat) * self.inv_base_init_quat, self.base_quat),
-            rpy=True,
-            degrees=True,
-        )
-        inv_base_quat = inv_quat(self.base_quat)
-        self.base_lin_vel[:] = transform_by_quat(self.robot.get_vel(), inv_base_quat)
-        self.base_ang_vel[:] = transform_by_quat(self.robot.get_ang(), inv_base_quat)
-        self.projected_gravity = transform_by_quat(self.global_gravity, inv_base_quat)
-        self.dof_pos[:] = self.robot.get_dofs_position(self.motors_dof_idx)
-        self.dof_vel[:] = self.robot.get_dofs_velocity(self.motors_dof_idx)
-
-
-        # compute observations
-        self.obs_buf = torch.cat(
-            [
-                self.base_ang_vel * self.obs_scales["ang_vel"],  # 3
-                self.projected_gravity,  # 3
-                self.commands * self.commands_scale,  # 3
-                (self.dof_pos - self.default_dof_pos) * self.obs_scales["dof_pos"],  # 12
-                self.dof_vel * self.obs_scales["dof_vel"],  # 12
-                self.actions,  # 12
-            ],
-            axis=-1,
-        )
+        self.get_observations()
 
         self.last_actions[:] = self.actions[:]
         self.last_dof_vel[:] = self.dof_vel[:]
 
-        self.extras["observations"]["critic"] = self.obs_buf
 
         return self.obs_buf, self.extras
 
@@ -334,11 +308,12 @@ class Go2Env:
         # compute observations
         self.obs_buf = torch.cat(
             [
-                self.base_ang_vel * self.obs_scales["ang_vel"],  # 3 - 0,1,2
+                self.base_ang_vel,  # 3 - 0,1,2
                 self.projected_gravity,  # 3 - 3,4,5
                 self.commands * self.commands_scale,  # 3 - 6,7,8
-                (self.dof_pos - self.default_dof_pos) * self.obs_scales["dof_pos"],  # 12 - 9-20
-                self.dof_vel * self.obs_scales["dof_vel"],  # 12 - 21-32
+                # (self.dof_pos - self.default_dof_pos) * self.obs_scales["dof_pos"],  # 12 - 9-20
+                self.dof_pos,
+                self.dof_vel,  # 12 - 21-32
                 self.actions,  # 12 - 33-44
             ],
             axis=-1,

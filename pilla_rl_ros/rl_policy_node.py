@@ -43,10 +43,95 @@ from std_srvs.srv import SetBool, Trigger
 from sensor_msgs.msg import JointState, Imu
 from message_filters import Subscriber, TimeSynchronizer, ApproximateTimeSynchronizer
 
+
+def get_cfgs():
+    env_cfg = {
+        "num_actions": 12,
+        # joint/link names
+        "default_joint_angles": {  # [rad]
+            "FL_hip_joint": 0.0,
+            "FR_hip_joint": 0.0,
+            "RL_hip_joint": 0.0,
+            "RR_hip_joint": 0.0,
+            "FL_thigh_joint": 0.8,
+            "FR_thigh_joint": 0.8,
+            "RL_thigh_joint": 1.0,
+            "RR_thigh_joint": 1.0,
+            "FL_calf_joint": -1.5,
+            "FR_calf_joint": -1.5,
+            "RL_calf_joint": -1.5,
+            "RR_calf_joint": -1.5,
+        },
+        "joint_names": [
+            "FR_hip_joint",
+            "FR_thigh_joint",
+            "FR_calf_joint",
+            "FL_hip_joint",
+            "FL_thigh_joint",
+            "FL_calf_joint",
+            "RR_hip_joint",
+            "RR_thigh_joint",
+            "RR_calf_joint",
+            "RL_hip_joint",
+            "RL_thigh_joint",
+            "RL_calf_joint",
+        ],
+        # PD
+        "kp": 20.0,
+        "kd": 0.5,
+        # termination
+        "termination_if_roll_greater_than": 10,  # degree
+        "termination_if_pitch_greater_than": 10,
+        # base pose
+        "base_init_pos": [0.0, 0.0, 0.42],
+        "base_init_quat": [1.0, 0.0, 0.0, 0.0],
+        "episode_length_s": 2000.0,
+        "resampling_time_s": 4.0,
+        "action_scale": 0.25,
+        "simulate_action_latency": False,
+        "clip_actions": 100.0,
+    }
+    obs_cfg = {
+        "num_obs": 45,
+        "obs_scales": {
+            "lin_vel": 2.0,
+            "ang_vel": 0.25,
+            "dof_pos": 1.0,
+            "dof_vel": 0.05,
+        },
+    }
+    reward_cfg = {
+        "tracking_sigma": 0.25,
+        "base_height_target": 0.3,
+        "feet_height_target": 0.075,
+        "reward_scales": {
+            "tracking_lin_vel": 1.0,
+            "tracking_ang_vel": 0.5,
+            "lin_vel_z": -1.0,
+            "base_height": -50.0,
+            "action_rate": -0.005,
+            "similar_to_default": -0.1,
+        },
+    }
+    command_cfg = {
+        "num_commands": 3,
+        "lin_vel_x_range": [-1.0, 2.0],
+        "lin_vel_y_range": [-0.5, 0.5],
+        "ang_vel_range": [-0.5, 0.5],
+    }
+
+    return env_cfg, obs_cfg, reward_cfg, command_cfg
+
+
 class RLPolicyNode(Node):
     def __init__(self):
         super().__init__('rl_policy')
         
+        self.env_cfg, self.obs_cfg, self.reward_cfg, self.command_cfg = get_cfgs()
+
+        self.default_dof_pos = np.array(
+            [self.env_cfg["default_joint_angles"][name] for name in self.env_cfg["joint_names"]],
+            dtype=np.float32)
         # Use simpler QoS profile for better reliability
         qos_profile = rclpy.qos.QoSProfile(depth=10)
         
@@ -100,37 +185,52 @@ class RLPolicyNode(Node):
         self.get_logger().debug(f'Received velocity command: linear_x={msg.linear.x}, linear_y={msg.linear.y}, angular_z={msg.angular.z}')
         self.last_velocity = msg
 
-    def _tick(self, joint_state_msg, imu: Float32MultiArray):
+    def compile_observation(self, joint_state_msg, imu: Float32MultiArray):
         # This function is called when both joint state and IMU messages are received
         # It can be used to update internal state if needed
-        pass
-        if self.policy is None:
-            self.get_logger().warn('Policy not loaded yet, skipping observation')
-            return
-            
+
         self.last_observation = np.zeros(45, dtype=np.float32)
-
         self.last_observation[0:6] = imu.data[0:6]  # Assuming imu.data is a list of floats
-
+        self.last_observation[0:3] = self.last_observation[0:3] * self.obs_cfg["obs_scales"]["ang_vel"]  # 6,7,8
         self.last_observation[9:21] = joint_state_msg.position[:12]  # First 12 joint positions
         self.last_observation[21:33] = joint_state_msg.velocity[:12]  # First 12 joint velocities
-
-        self.action_count += 1
-
+        self.last_observation[9:21] = (self.last_observation[9:21] - self.default_dof_pos) * self.obs_cfg["obs_scales"]["dof_pos"]
+        self.last_observation[21:33] = self.last_observation[21:33] * self.obs_cfg["obs_scales"]["dof_vel"]
         # Include velocity commands in observation if available
         if self.last_velocity is not None:
             # Append velocity commands to observation
             velocity_data = [
-                self.last_velocity.linear.x * 2.0,
-                self.last_velocity.linear.y * 2.0, 
-                self.last_velocity.angular.z * 0.25
+                self.last_velocity.linear.x * self.obs_cfg["obs_scales"]["lin_vel"],
+                self.last_velocity.linear.y * self.obs_cfg["obs_scales"]["lin_vel"],
+                self.last_velocity.angular.z * self.obs_cfg["obs_scales"]["ang_vel"]
             ]
             # velocity_data = np.array(velocity_data, dtype=np.float32)
             self.last_observation[6] = velocity_data[0]
             self.last_observation[7] = velocity_data[1]
             self.last_observation[8] = velocity_data[2]
+        self.last_observation[33:45] = self.last_actions  # Last actions taken
 
-        self.last_observation[33:45] = self.last_actions
+        return self.last_observation
+
+    def publish_action(self, action):
+        exec_actions = np.clip(action, -self.env_cfg["clip_actions"], self.env_cfg["clip_actions"])
+        target_dof_pos = exec_actions * self.env_cfg["action_scale"] + self.default_dof_pos
+        target_dof_pos = target_dof_pos
+        joint_msg = JointState()
+        joint_msg.name = [f'joint_{i+1}' for i in range(len(target_dof_pos))]
+        joint_msg.position = target_dof_pos.tolist()
+        self.joint_command_publisher.publish(joint_msg)
+
+
+    def _tick(self, joint_state_msg, imu: Float32MultiArray):
+        # This function is called when both joint state and IMU messages are received
+        # It can be used to update internal state if needed
+        if self.policy is None:
+            self.get_logger().warn('Policy not loaded yet, skipping observation')
+            return
+            
+        self.action_count += 1
+        self.compile_observation(joint_state_msg, imu)
 
         try:
             obs_tensor = torch.tensor(self.last_observation, dtype=torch.float32, device=self.device).unsqueeze(0)
@@ -141,27 +241,20 @@ class RLPolicyNode(Node):
                 return
                 
             with torch.no_grad():
-                action = self.policy(obs_tensor).squeeze(0).cpu().numpy()  # Move to CPU for ROS message
+                action = self.policy(obs_tensor).squeeze(0).cpu().numpy()
             
             self.last_actions = action
             # Check action size  
-            if len(action) != 12:
-                self.get_logger().error(f'Wrong action size: expected 12, got {len(action)}')
-                return
+            # if len(action) != 12:
+            #     self.get_logger().error(f'Wrong action size: expected 12, got {len(action)}')
+            #     return
                 
             # Log less frequently to reduce noise
-            if self.action_count % 50 == 0:  # Log every 50th action
-                self.get_logger().info(f'Action #{self.action_count}: [{action[0]:.3f}, {action[1]:.3f}, ...] obs_size: {obs_tensor.shape[1]}')
-            
-            # action_msg = Float32MultiArray()
-            # action_msg.data = action.tolist()
-            # self.action_publisher.publish(action_msg)
+            # if self.action_count % 50 == 0:  # Log every 50th action
+            #     self.get_logger().info(f'Action #{self.action_count}: [{action[0]:.3f}, {action[1]:.3f}, ...] obs_size: {obs_tensor.shape[1]}')
 
-            joint_msg = JointState()
-            joint_msg.name = [f'joint_{i+1}' for i in range(len(action))]
-            joint_msg.position = action.tolist()
-            self.joint_command_publisher.publish(joint_msg)
-            
+            self.publish_action(action)
+
         except Exception as e:
             self.get_logger().error(f'Error in observation callback: {str(e)}')
             
