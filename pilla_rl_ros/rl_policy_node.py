@@ -176,7 +176,7 @@ class RLPolicyNode(Node):
         self.action_count = 0
         self.policy = None
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
+        self.decimate_factor = 2  # Not used currently
         # Load policy after setting up publishers/subscribers
         self.load_policy('src/pilla_rl_ros/pilla_rl_ros/policy.jit')
 
@@ -229,7 +229,6 @@ class RLPolicyNode(Node):
             self.get_logger().warn('Policy not loaded yet, skipping observation')
             return
             
-        self.action_count += 1
         self.compile_observation(joint_state_msg, imu)
 
         try:
@@ -239,14 +238,18 @@ class RLPolicyNode(Node):
             if obs_tensor.shape[1] != 45:
                 self.get_logger().error(f'Wrong observation size: expected 45, got {obs_tensor.shape[1]}')
                 return
-                
-            with torch.no_grad():
-                action = self.policy(obs_tensor).squeeze(0).cpu().numpy()
+
+            if self.action_count % self.decimate_factor == 0:  
+                with torch.no_grad():
+                    action = self.policy(obs_tensor).squeeze(0).cpu().numpy()
             
-            self.last_actions = action
+                    self.last_actions = action
 
-            self.publish_action(action)
+                self.publish_action(action)
+            else:
+                self.publish_action(self.last_actions)
 
+            self.action_count += 1
         except Exception as e:
             self.get_logger().error(f'Error in observation callback: {str(e)}')
             

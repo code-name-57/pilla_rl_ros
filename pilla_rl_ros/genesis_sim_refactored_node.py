@@ -150,7 +150,7 @@ class Go2Env:
         self.device = gs.device
 
         self.simulate_action_latency = False  # Disable for better policy testing
-        self.dt = 0.02  # control frequency on real robot is 50hz
+        self.dt = 0.01  # control frequency on real robot is 50hz
         self.max_episode_length = math.ceil(env_cfg["episode_length_s"] / self.dt)
 
         self.env_cfg = env_cfg
