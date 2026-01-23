@@ -158,9 +158,6 @@ class Go2Env:
         self.reward_cfg = reward_cfg
         self.command_cfg = command_cfg
 
-        self.obs_scales = obs_cfg["obs_scales"]
-        self.reward_scales = reward_cfg["reward_scales"]
-
         # create scene
         self.scene = gs.Scene(
             sim_options=gs.options.SimOptions(dt=self.dt, substeps=2),
@@ -217,7 +214,7 @@ class Go2Env:
         self.episode_length_buf = torch.zeros((self.num_envs,), device=gs.device, dtype=gs.tc_int)
         self.commands = torch.zeros((self.num_envs, self.num_commands), device=gs.device, dtype=gs.tc_float)
         self.commands_scale = torch.tensor(
-            [self.obs_scales["lin_vel"], self.obs_scales["lin_vel"], self.obs_scales["ang_vel"]],
+            [0.0, 0.0, 0.0],
             device=gs.device,
             dtype=gs.tc_float,
         )

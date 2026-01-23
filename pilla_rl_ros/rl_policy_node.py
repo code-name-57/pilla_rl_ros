@@ -214,7 +214,7 @@ class RLPolicyNode(Node):
 
     def publish_action(self, action):
         exec_actions = np.clip(action, -self.env_cfg["clip_actions"], self.env_cfg["clip_actions"])
-        target_dof_pos = exec_actions * self.env_cfg["action_scale"] + self.default_dof_pos
+        target_dof_pos = (exec_actions * self.env_cfg["action_scale"]) + self.default_dof_pos
         target_dof_pos = target_dof_pos
         joint_msg = JointState()
         joint_msg.name = [f'joint_{i+1}' for i in range(len(target_dof_pos))]
@@ -244,14 +244,6 @@ class RLPolicyNode(Node):
                 action = self.policy(obs_tensor).squeeze(0).cpu().numpy()
             
             self.last_actions = action
-            # Check action size  
-            # if len(action) != 12:
-            #     self.get_logger().error(f'Wrong action size: expected 12, got {len(action)}')
-            #     return
-                
-            # Log less frequently to reduce noise
-            # if self.action_count % 50 == 0:  # Log every 50th action
-            #     self.get_logger().info(f'Action #{self.action_count}: [{action[0]:.3f}, {action[1]:.3f}, ...] obs_size: {obs_tensor.shape[1]}')
 
             self.publish_action(action)
 
