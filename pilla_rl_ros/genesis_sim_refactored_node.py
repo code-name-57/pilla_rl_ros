@@ -232,6 +232,7 @@ class Go2Env:
         )
         self.extras = dict()  # extra information for logging
         self.extras["observations"] = dict()
+        self.last_joint_positions = None
 
     def reset(self):
         """Reset the environment to initial state"""
@@ -268,12 +269,14 @@ class Go2Env:
         obs, info = self.get_observations()
         return obs, info
 
-    def step(self, actions):
+    def step(self, actions=None):
         # self.actions = torch.clip(actions, -self.env_cfg["clip_actions"], self.env_cfg["clip_actions"])
         # exec_actions = self.last_actions if self.simulate_action_latency else self.actions
         # target_dof_pos = exec_actions * self.env_cfg["action_scale"] + self.default_dof_pos
-        target_dof_pos = actions
-        self.robot.control_dofs_position(target_dof_pos, self.motors_dof_idx)
+        if actions is not None:
+            target_dof_pos = actions
+            self.robot.control_dofs_position(target_dof_pos, self.motors_dof_idx)
+        
         self.scene.step()
 
         # update buffers
@@ -381,29 +384,12 @@ class GenesisSimNode(Node):
         self.get_logger().info(f'Genesis sim initialized. Initial IMU data: {imu_msg.data}, Initial joint positions: {joint_state_msg.position}, Initial joint velocities: {joint_state_msg.velocity}')
 
         # Remove the timer - we'll step only when receiving actions
-        # self.timer = self.create_timer(0.02, self.timer_callback)
+        self.timer = self.create_timer(0.02, self.timer_callback)
 
-
-    def velocity_callback(self, msg):
-        # Handle incoming velocity commands and update environment commands
-        self.last_desired_velocity = msg
-        
-        # Update the environment's command buffer with the received velocity commands
-        self.env.commands[0, 0] = msg.linear.x   # linear_x
-        self.env.commands[0, 1] = msg.linear.y   # linear_y  
-        self.env.commands[0, 2] = msg.angular.z  # angular_z
-        
-        self.get_logger().info(f'Updated env commands: linear_x={msg.linear.x}, linear_y={msg.linear.y}, angular_z={msg.angular.z}')
-
-    def joint_command_callback(self, msg):
-        # Handle incoming joint commands (if needed)
-        if len(msg.position) != 12:
-            self.get_logger().error(f'Expected 12 joint positions, but got {len(msg.position)}')
-            return
-        joint_positions = torch.tensor(msg.position, device=gs.device, dtype=gs.tc_float).unsqueeze(0)
+    def timer_callback(self):
         self.step_count += 1
-        obs, info = self.env.step(joint_positions)
-        
+        obs, info = self.env.step(self.last_joint_positions)
+        self.last_joint_positions = None  # Reset after use
         # Publish joint states
         joint_state_msg = JointState()
         joint_state_msg.header.stamp = self.get_clock().now().to_msg()
@@ -418,8 +404,17 @@ class GenesisSimNode(Node):
         imu_msg.data = obs[0, 0:6].cpu().numpy().tolist()  # IMU data from observation
         self.imu_publisher.publish(imu_msg)
         # Log progress
-        if self.step_count % 50 == 0:  # Log every 50 steps
-            self.get_logger().info(f'Step {self.step_count}: obs_size={len(obs[0].cpu().numpy().tolist())}, action_norm={torch.norm(joint_positions).item():.3f}')
+        # if self.step_count % 50 == 0:  # Log every 50 steps
+        #     self.get_logger().info(f'Step {self.step_count}: obs_size={len(obs[0].cpu().numpy().tolist())}, action_norm={torch.norm(self.last_joint_positions).item():.3f}')
+
+       
+    def joint_command_callback(self, msg):
+        # Handle incoming joint commands (if needed)
+        if len(msg.position) != 12:
+            self.get_logger().error(f'Expected 12 joint positions, but got {len(msg.position)}')
+            return
+        joint_positions = torch.tensor(msg.position, device=gs.device, dtype=gs.tc_float).unsqueeze(0)
+        self.last_joint_positions = joint_positions
 
 def main():
     rclpy.init()
