@@ -55,7 +55,7 @@ import torch
 import math
 import genesis as gs
 from genesis.utils.geom import quat_to_xyz, transform_by_quat, inv_quat, transform_quat_by_quat
-
+from genesis.sensors.imu import IMUOptions
 
 def gs_rand_float(lower, upper, shape, device):
     return (upper - lower) * torch.rand(size=shape, device=device) + lower
@@ -191,6 +191,9 @@ class Go2Env:
                 quat=self.base_init_quat.cpu().numpy(),
             ),
         )
+
+        base_link = self.robot.get_link("base")
+        self.imu_sensor = self.scene.add_sensor(IMUOptions(entity_idx=self.robot.idx, link_idx_local=base_link.idx_local,read_delay=0.02*2))
 
         # build
         self.scene.build(n_envs=num_envs)
@@ -351,6 +354,13 @@ class GenesisSimNode(Node):
             qos_profile=qos_profile
         )
 
+        self.imu_raw_publisher = self.create_publisher(
+            Float32MultiArray,
+            '/imu/data_raw',
+            qos_profile=qos_profile
+        )
+
+
         gs.init()
         env_cfg, obs_cfg, reward_cfg, command_cfg = get_cfgs()
 
@@ -372,6 +382,11 @@ class GenesisSimNode(Node):
         imu_msg = Float32MultiArray()
         imu_msg.data = obs[0, 0:6].cpu().numpy().tolist()  # IMU data from observation
         self.imu_publisher.publish(imu_msg)
+
+        imu_raw_msg = Float32MultiArray()
+        imu_raw_msg.data = obs[0, 0:6].cpu().numpy().tolist()  # Raw IMU data from observation
+        self.imu_raw_publisher.publish(imu_raw_msg)
+
         joint_state_msg = JointState()
         joint_state_msg.header.stamp = self.get_clock().now().to_msg()
         joint_state_msg.name = self.env.env_cfg["joint_names"]
@@ -403,6 +418,19 @@ class GenesisSimNode(Node):
         imu_msg = Float32MultiArray()
         imu_msg.data = obs[0, 0:6].cpu().numpy().tolist()  # IMU data from observation
         self.imu_publisher.publish(imu_msg)
+
+
+        imu_reading = self.env.imu_sensor.read_ground_truth()
+        imu_msg_raw = Float32MultiArray()
+        imu_msg_raw.data = obs[0, 0:6].cpu().numpy().tolist()
+
+        # imu_msg_raw.header.stamp = self.get_clock().now().to_msg()
+        # imu_msg_raw.data = imu_reading['ang_vel'] + imu_reading['lin_acc']
+        self.imu_raw_publisher.publish(imu_msg_raw)
+
+        # imu_msg_raw.linear_acceleration.y = imu_reading['lin_acc'][1].item()
+        # imu_msg_raw.linear_acceleration.z = -imu_reading['lin_acc'][2].item()
+        # self.imu_raw_publisher.publish(imu_msg_raw)
         # Log progress
         # if self.step_count % 50 == 0:  # Log every 50 steps
         #     self.get_logger().info(f'Step {self.step_count}: obs_size={len(obs[0].cpu().numpy().tolist())}, action_norm={torch.norm(self.last_joint_positions).item():.3f}')

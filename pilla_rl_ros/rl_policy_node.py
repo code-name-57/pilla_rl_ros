@@ -160,8 +160,14 @@ class RLPolicyNode(Node):
             qos_profile=qos_profile
         )
 
+        self.imu_raw_subscriber = Subscriber(self,
+            Float32MultiArray, 
+            '/imu/data_raw', 
+            qos_profile=qos_profile
+        )
+
         queue_size = 10
-        subscribers = [self.joint_state_subscriber, self.imu_subscriber]
+        subscribers = [self.joint_state_subscriber, self.imu_subscriber, self.imu_raw_subscriber]
 
         # Time synchronizer to ensure joint state and IMU data are processed
         # together
@@ -185,12 +191,13 @@ class RLPolicyNode(Node):
         self.get_logger().debug(f'Received velocity command: linear_x={msg.linear.x}, linear_y={msg.linear.y}, angular_z={msg.angular.z}')
         self.last_velocity = msg
 
-    def compile_observation(self, joint_state_msg, imu: Float32MultiArray):
+    def compile_observation(self, joint_state_msg, imu: Float32MultiArray, imu_raw: Float32MultiArray):
         # This function is called when both joint state and IMU messages are received
         # It can be used to update internal state if needed
 
         self.last_observation = np.zeros(45, dtype=np.float32)
         self.last_observation[0:6] = imu.data[0:6]  # Assuming imu.data is a list of floats
+        # self.get_logger().debug(f'Raw IMU data: {imu_raw.data[0:6]}')
         self.last_observation[0:3] = self.last_observation[0:3] * self.obs_cfg["obs_scales"]["ang_vel"]  # 6,7,8
         self.last_observation[9:21] = joint_state_msg.position[:12]  # First 12 joint positions
         self.last_observation[21:33] = joint_state_msg.velocity[:12]  # First 12 joint velocities
@@ -222,14 +229,14 @@ class RLPolicyNode(Node):
         self.joint_command_publisher.publish(joint_msg)
 
 
-    def _tick(self, joint_state_msg, imu: Float32MultiArray):
+    def _tick(self, joint_state_msg, imu: Float32MultiArray, imu_raw: Float32MultiArray):
         # This function is called when both joint state and IMU messages are received
         # It can be used to update internal state if needed
         if self.policy is None:
             self.get_logger().warn('Policy not loaded yet, skipping observation')
             return
-            
-        self.compile_observation(joint_state_msg, imu)
+
+        self.compile_observation(joint_state_msg, imu, imu_raw)
 
         try:
             obs_tensor = torch.tensor(self.last_observation, dtype=torch.float32, device=self.device).unsqueeze(0)
