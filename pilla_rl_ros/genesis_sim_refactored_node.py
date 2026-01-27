@@ -421,8 +421,15 @@ class GenesisSimNode(Node):
 
 
         imu_reading = self.env.imu_sensor.read_ground_truth()
+        imu_reading_array = [imu_reading['ang_vel'][0].item(),
+                                imu_reading['ang_vel'][1].item(),
+                                imu_reading['ang_vel'][2].item(),
+                                imu_reading['lin_acc'][0].item(),
+                                imu_reading['lin_acc'][1].item(),
+                                imu_reading['lin_acc'][2].item()]
+
         imu_msg_raw = Float32MultiArray()
-        imu_msg_raw.data = obs[0, 0:6].cpu().numpy().tolist()
+        imu_msg_raw.data = imu_reading_array
 
         # imu_msg_raw.header.stamp = self.get_clock().now().to_msg()
         # imu_msg_raw.data = imu_reading['ang_vel'] + imu_reading['lin_acc']
