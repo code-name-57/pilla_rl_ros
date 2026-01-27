@@ -235,7 +235,6 @@ class Go2Env:
         )
         self.extras = dict()  # extra information for logging
         self.extras["observations"] = dict()
-        self.last_joint_positions = None
 
     def reset(self):
         """Reset the environment to initial state"""
@@ -350,16 +349,22 @@ class GenesisSimNode(Node):
 
         self.imu_publisher = self.create_publisher(
             Float32MultiArray,
-            '/imu/data',
+            '/imu/data2',
             qos_profile=qos_profile
         )
 
         self.imu_raw_publisher = self.create_publisher(
             Float32MultiArray,
-            '/imu/data_raw',
+            '/imu/data_raw2',
             qos_profile=qos_profile
         )
 
+        self.imu_raw_publisher2 = self.create_publisher(
+            Imu,
+            '/imu/data_raw',
+            qos_profile=qos_profile
+        )
+        self.last_joint_positions = None
 
         gs.init()
         env_cfg, obs_cfg, reward_cfg, command_cfg = get_cfgs()
@@ -430,14 +435,19 @@ class GenesisSimNode(Node):
 
         imu_msg_raw = Float32MultiArray()
         imu_msg_raw.data = imu_reading_array
-
-        # imu_msg_raw.header.stamp = self.get_clock().now().to_msg()
-        # imu_msg_raw.data = imu_reading['ang_vel'] + imu_reading['lin_acc']
         self.imu_raw_publisher.publish(imu_msg_raw)
 
-        # imu_msg_raw.linear_acceleration.y = imu_reading['lin_acc'][1].item()
-        # imu_msg_raw.linear_acceleration.z = -imu_reading['lin_acc'][2].item()
-        # self.imu_raw_publisher.publish(imu_msg_raw)
+        imu_msg_raw2 = Imu()
+        imu_msg_raw2.header.stamp = self.get_clock().now().to_msg()
+
+        imu_msg_raw2.angular_velocity.x = imu_reading['ang_vel'][0].item()
+        imu_msg_raw2.angular_velocity.y = imu_reading['ang_vel'][1].item()
+        imu_msg_raw2.angular_velocity.z = imu_reading['ang_vel'][2].item()
+        imu_msg_raw2.linear_acceleration.x = imu_reading['lin_acc'][0].item()
+        imu_msg_raw2.linear_acceleration.y = imu_reading['lin_acc'][1].item()
+        imu_msg_raw2.linear_acceleration.z = imu_reading['lin_acc'][2].item()
+        self.imu_raw_publisher2.publish(imu_msg_raw2)
+  
         # Log progress
         # if self.step_count % 50 == 0:  # Log every 50 steps
         #     self.get_logger().info(f'Step {self.step_count}: obs_size={len(obs[0].cpu().numpy().tolist())}, action_norm={torch.norm(self.last_joint_positions).item():.3f}')
