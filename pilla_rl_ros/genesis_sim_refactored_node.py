@@ -446,6 +446,10 @@ class GenesisSimNode(Node):
         imu_msg_raw2.linear_acceleration.x = imu_reading['lin_acc'][0].item()
         imu_msg_raw2.linear_acceleration.y = imu_reading['lin_acc'][1].item()
         imu_msg_raw2.linear_acceleration.z = imu_reading['lin_acc'][2].item()
+        imu_msg_raw2.orientation.x = self.env.base_quat[0,1].item()
+        imu_msg_raw2.orientation.y = self.env.base_quat[0,2].item()
+        imu_msg_raw2.orientation.z = self.env.base_quat[0,3].item()
+        imu_msg_raw2.orientation.w = self.env.base_quat[0,0].item()
         self.imu_raw_publisher2.publish(imu_msg_raw2)
   
         # Log progress

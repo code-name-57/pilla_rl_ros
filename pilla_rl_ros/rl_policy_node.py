@@ -162,7 +162,14 @@ class RLPolicyNode(Node):
 
         self.imu_raw_subscriber = Subscriber(self,
             Imu, 
-            '/imu/data', 
+            '/imu/data_raw', 
+            qos_profile=qos_profile
+        )
+
+
+        self.sensor_imu_publisher = self.create_publisher(
+            Float32MultiArray, 
+            '/sensor_imu_rl_values', 
             qos_profile=qos_profile
         )
 
@@ -265,6 +272,10 @@ class RLPolicyNode(Node):
         self.last_observation = np.zeros(45, dtype=np.float32)
         # self.last_observation[0:6] = imu.data[0:6]
         self.last_observation[0:6] = self.imu_to_rl_obs(imu_raw)
+
+        imu_msg = Float32MultiArray()
+        imu_msg.data = self.last_observation[0:6].tolist()
+        self.sensor_imu_publisher.publish(imu_msg)
         # self.get_logger().debug(f'Raw IMU data: {imu_raw.data[0:6]}')
         self.last_observation[0:3] = self.last_observation[0:3] * self.obs_cfg["obs_scales"]["ang_vel"]  # 6,7,8
         self.last_observation[9:21] = joint_state_msg.position[:12]  # First 12 joint positions
