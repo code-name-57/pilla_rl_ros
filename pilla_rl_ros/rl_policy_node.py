@@ -35,6 +35,7 @@ import numpy as np
 
 # from champ_msgs.msg import Pose as PoseLite
 from geometry_msgs.msg import Pose as Pose
+from geometry_msgs.msg import Vector3
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
@@ -162,19 +163,24 @@ class RLPolicyNode(Node):
 
         self.imu_raw_subscriber = Subscriber(self,
             Imu, 
-            '/imu/data_raw', 
+            '/imu/data', 
             qos_profile=qos_profile
         )
 
+        self.gravity_rl_publisher = self.create_publisher(
+            Vector3,
+            '/gravity_direction_rl',
+            qos_profile=qos_profile
+        )
 
-        self.sensor_imu_publisher = self.create_publisher(
-            Float32MultiArray, 
-            '/sensor_imu_rl_values', 
+        self.gravity_imu_publisher = self.create_publisher(
+            Vector3,
+            '/gravity_direction_imu',
             qos_profile=qos_profile
         )
 
         queue_size = 10
-        subscribers = [self.joint_state_subscriber, self.imu_raw_subscriber]
+        subscribers = [self.joint_state_subscriber, self.imu_subscriber, self.imu_raw_subscriber]
 
         # Time synchronizer to ensure joint state and IMU data are processed
         # together
@@ -265,17 +271,26 @@ class RLPolicyNode(Node):
 
         return obs
 
-    def compile_observation(self, joint_state_msg, imu_raw: Imu):
+    def compile_observation(self, joint_state_msg, imu: Float32MultiArray, imu_raw: Imu):
         # This function is called when both joint state and IMU messages are received
         # It can be used to update internal state if needed
 
         self.last_observation = np.zeros(45, dtype=np.float32)
-        # self.last_observation[0:6] = imu.data[0:6]
-        self.last_observation[0:6] = self.imu_to_rl_obs(imu_raw)
+        self.last_observation[0:6] = imu.data[0:6]
 
-        imu_msg = Float32MultiArray()
-        imu_msg.data = self.last_observation[0:6].tolist()
-        self.sensor_imu_publisher.publish(imu_msg)
+        gravity_rl = Vector3()
+        gravity_rl.x = float(self.last_observation[3])
+        gravity_rl.y = float(self.last_observation[4])
+        gravity_rl.z = float(self.last_observation[5])
+        self.gravity_rl_publisher.publish(gravity_rl)
+
+        self.last_observation[0:6] = self.imu_to_rl_obs(imu_raw)
+        gravity_imu = Vector3()
+        gravity_imu.x = float(self.last_observation[3])
+        gravity_imu.y = float(self.last_observation[4])
+        gravity_imu.z = float(self.last_observation[5])
+        self.gravity_imu_publisher.publish(gravity_imu)
+
         # self.get_logger().debug(f'Raw IMU data: {imu_raw.data[0:6]}')
         self.last_observation[0:3] = self.last_observation[0:3] * self.obs_cfg["obs_scales"]["ang_vel"]  # 6,7,8
         self.last_observation[9:21] = joint_state_msg.position[:12]  # First 12 joint positions
@@ -308,32 +323,33 @@ class RLPolicyNode(Node):
         self.joint_command_publisher.publish(joint_msg)
 
 
-    def _tick(self, joint_state_msg, imu_raw: Imu):
+    def _tick(self, joint_state_msg, imu: Float32MultiArray, imu_raw: Imu):
         # This function is called when both joint state and IMU messages are received
         # It can be used to update internal state if needed
         if self.policy is None:
             self.get_logger().warn('Policy not loaded yet, skipping observation')
             return
 
-        self.compile_observation(joint_state_msg, imu_raw)
+        self.compile_observation(joint_state_msg, imu, imu_raw)
 
         try:
-            obs_tensor = torch.tensor(self.last_observation, dtype=torch.float32, device=self.device).unsqueeze(0)
-            
-            # Check observation size
-            if obs_tensor.shape[1] != 45:
-                self.get_logger().error(f'Wrong observation size: expected 45, got {obs_tensor.shape[1]}')
-                return
+            if self.action_count > 6000:
+                obs_tensor = torch.tensor(self.last_observation, dtype=torch.float32, device=self.device).unsqueeze(0)
+                
+                # Check observation size
+                if obs_tensor.shape[1] != 45:
+                    self.get_logger().error(f'Wrong observation size: expected 45, got {obs_tensor.shape[1]}')
+                    return
 
-            if self.action_count % self.decimate_factor == 0:  
-                with torch.no_grad():
-                    action = self.policy(obs_tensor).squeeze(0).cpu().numpy()
-            
-                    self.last_actions = action
+                if self.action_count % self.decimate_factor == 0:  
+                    with torch.no_grad():
+                        action = self.policy(obs_tensor).squeeze(0).cpu().numpy()
+                
+                        self.last_actions = action
 
-                self.publish_action(action)
-            else:
-                self.publish_action(self.last_actions)
+                    self.publish_action(action)
+                else:
+                    self.publish_action(self.last_actions)
 
             self.action_count += 1
         except Exception as e:

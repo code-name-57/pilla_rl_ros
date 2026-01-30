@@ -36,7 +36,7 @@ def generate_launch_description():
                 {"publish_tf": True},
                 {"stateless": False},
                 {"world_frame": 'nwu'},
-                {"gain": 0.7},
+                {"gain": 0.2},
             ]
         ),
 ])
