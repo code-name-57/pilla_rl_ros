@@ -25,5 +25,18 @@ def generate_launch_description():
             executable="genesis_sim_node",
             name="genesis_sim_node",
         ),
-        
+        Node(
+            package="imu_filter_madgwick",
+            executable="imu_filter_madgwick_node",
+            name="imu_filter_madgwick",
+            # namespace="pilla",
+            parameters=[
+                {"use_mag": True},
+                {"fixed_frame": 'odom'},
+                {"publish_tf": True},
+                {"stateless": False},
+                {"world_frame": 'nwu'},
+                {"gain": 0.7},
+            ]
+        ),
 ])
