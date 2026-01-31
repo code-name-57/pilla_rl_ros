@@ -35,6 +35,7 @@ import numpy as np
 
 # from champ_msgs.msg import Pose as PoseLite
 from geometry_msgs.msg import Pose as Pose
+from geometry_msgs.msg import Vector3
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
@@ -156,12 +157,30 @@ class RLPolicyNode(Node):
 
         self.imu_subscriber = Subscriber(self,
             Float32MultiArray, 
+            '/imu/data2', 
+            qos_profile=qos_profile
+        )
+
+        self.imu_raw_subscriber = Subscriber(self,
+            Imu, 
             '/imu/data', 
             qos_profile=qos_profile
         )
 
+        self.gravity_rl_publisher = self.create_publisher(
+            Vector3,
+            '/gravity_direction_rl',
+            qos_profile=qos_profile
+        )
+
+        self.gravity_imu_publisher = self.create_publisher(
+            Vector3,
+            '/gravity_direction_imu',
+            qos_profile=qos_profile
+        )
+
         queue_size = 10
-        subscribers = [self.joint_state_subscriber, self.imu_subscriber]
+        subscribers = [self.joint_state_subscriber, self.imu_subscriber, self.imu_raw_subscriber]
 
         # Time synchronizer to ensure joint state and IMU data are processed
         # together
@@ -184,13 +203,95 @@ class RLPolicyNode(Node):
         # Currently not used, but could be integrated into observation if needed
         self.get_logger().debug(f'Received velocity command: linear_x={msg.linear.x}, linear_y={msg.linear.y}, angular_z={msg.angular.z}')
         self.last_velocity = msg
+    
+    def quat_to_rot_matrix(self, quat: np.ndarray) -> np.ndarray:
+        """Convert input quaternion to rotation matrix.
 
-    def compile_observation(self, joint_state_msg, imu: Float32MultiArray):
+        Args:
+            quat (np.ndarray): Input quaternion (w, x, y, z).
+
+        Returns:
+            np.ndarray: A 3x3 rotation matrix.
+        """
+        q = np.array(quat, dtype=np.float64, copy=True)
+        nq = np.dot(q, q)
+        if nq < 1e-10:
+            return np.identity(3)
+        q *= np.sqrt(2.0 / nq)
+        q = np.outer(q, q)
+        return np.array(
+            (
+                (1.0 - q[2, 2] - q[3, 3], q[1, 2] - q[3, 0], q[1, 3] + q[2, 0]),
+                (q[1, 2] + q[3, 0], 1.0 - q[1, 1] - q[3, 3], q[2, 3] - q[1, 0]),
+                (q[1, 3] - q[2, 0], q[2, 3] + q[1, 0], 1.0 - q[1, 1] - q[2, 2]),
+            ),
+            dtype=np.float64,
+        )
+
+    def imu_to_rl_obs(self, imu: Imu):
+        quat_I = imu.orientation
+        quat_array = np.array([quat_I.w, quat_I.x, quat_I.y, quat_I.z])
+
+        # Convert quaternion to rotation matrix
+        # (transpose for body to inertial frame)
+        R_BI = self.quat_to_rot_matrix(quat_array).T
+
+        # Extract linear acceleration and integrate to estimate velocity
+        lin_acc_b = np.array([
+            imu.linear_acceleration.x,
+            imu.linear_acceleration.y,
+            imu.linear_acceleration.z
+        ])
+        
+        # Simple integration to estimate velocity
+        # self._lin_vel_b = lin_acc_b * self._dt + self._lin_vel_b
+        
+        # Extract angular velocity
+        ang_vel_b = np.array([
+            imu.angular_velocity.x,
+            imu.angular_velocity.y,
+            imu.angular_velocity.z
+        ])
+        
+        # Calculate gravity direction in body frame
+        gravity_b = np.matmul(R_BI, np.array([0.0, 0.0, -1.0]))
+
+        # Initialize observation vector
+        obs = np.zeros(6, dtype=np.float32)
+        
+        # Fill observation vector components:
+        # Base linear velocity (3)
+        # obs[:3] = self._lin_vel_b
+
+        # Base angular velocity (3)
+        obs[0:3] = ang_vel_b
+
+        # Gravity direction (3)
+        obs[3:6] = gravity_b
+
+        return obs
+
+    def compile_observation(self, joint_state_msg, imu: Float32MultiArray, imu_raw: Imu):
         # This function is called when both joint state and IMU messages are received
         # It can be used to update internal state if needed
 
         self.last_observation = np.zeros(45, dtype=np.float32)
-        self.last_observation[0:6] = imu.data[0:6]  # Assuming imu.data is a list of floats
+        self.last_observation[0:6] = imu.data[0:6]
+
+        gravity_rl = Vector3()
+        gravity_rl.x = float(self.last_observation[3])
+        gravity_rl.y = float(self.last_observation[4])
+        gravity_rl.z = float(self.last_observation[5])
+        self.gravity_rl_publisher.publish(gravity_rl)
+
+        self.last_observation[0:6] = self.imu_to_rl_obs(imu_raw)
+        gravity_imu = Vector3()
+        gravity_imu.x = float(self.last_observation[3])
+        gravity_imu.y = float(self.last_observation[4])
+        gravity_imu.z = float(self.last_observation[5])
+        self.gravity_imu_publisher.publish(gravity_imu)
+
+        # self.get_logger().debug(f'Raw IMU data: {imu_raw.data[0:6]}')
         self.last_observation[0:3] = self.last_observation[0:3] * self.obs_cfg["obs_scales"]["ang_vel"]  # 6,7,8
         self.last_observation[9:21] = joint_state_msg.position[:12]  # First 12 joint positions
         self.last_observation[21:33] = joint_state_msg.velocity[:12]  # First 12 joint velocities
@@ -222,32 +323,33 @@ class RLPolicyNode(Node):
         self.joint_command_publisher.publish(joint_msg)
 
 
-    def _tick(self, joint_state_msg, imu: Float32MultiArray):
+    def _tick(self, joint_state_msg, imu: Float32MultiArray, imu_raw: Imu):
         # This function is called when both joint state and IMU messages are received
         # It can be used to update internal state if needed
         if self.policy is None:
             self.get_logger().warn('Policy not loaded yet, skipping observation')
             return
-            
-        self.compile_observation(joint_state_msg, imu)
+
+        self.compile_observation(joint_state_msg, imu, imu_raw)
 
         try:
-            obs_tensor = torch.tensor(self.last_observation, dtype=torch.float32, device=self.device).unsqueeze(0)
-            
-            # Check observation size
-            if obs_tensor.shape[1] != 45:
-                self.get_logger().error(f'Wrong observation size: expected 45, got {obs_tensor.shape[1]}')
-                return
+            if self.action_count > 6000:
+                obs_tensor = torch.tensor(self.last_observation, dtype=torch.float32, device=self.device).unsqueeze(0)
+                
+                # Check observation size
+                if obs_tensor.shape[1] != 45:
+                    self.get_logger().error(f'Wrong observation size: expected 45, got {obs_tensor.shape[1]}')
+                    return
 
-            if self.action_count % self.decimate_factor == 0:  
-                with torch.no_grad():
-                    action = self.policy(obs_tensor).squeeze(0).cpu().numpy()
-            
-                    self.last_actions = action
+                if self.action_count % self.decimate_factor == 0:  
+                    with torch.no_grad():
+                        action = self.policy(obs_tensor).squeeze(0).cpu().numpy()
+                
+                        self.last_actions = action
 
-                self.publish_action(action)
-            else:
-                self.publish_action(self.last_actions)
+                    self.publish_action(action)
+                else:
+                    self.publish_action(self.last_actions)
 
             self.action_count += 1
         except Exception as e:

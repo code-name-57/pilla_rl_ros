@@ -27,7 +27,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Float32MultiArray
 from std_srvs.srv import SetBool, Trigger
-from sensor_msgs.msg import JointState, Imu
+from sensor_msgs.msg import JointState, Imu, MagneticField
 from message_filters import Subscriber, TimeSynchronizer
 
 def quaternion_from_euler(roll, pitch, yaw):
@@ -55,7 +55,7 @@ import torch
 import math
 import genesis as gs
 from genesis.utils.geom import quat_to_xyz, transform_by_quat, inv_quat, transform_quat_by_quat
-
+# from genesis.sensors.imu import IMUOptions
 
 def gs_rand_float(lower, upper, shape, device):
     return (upper - lower) * torch.rand(size=shape, device=device) + lower
@@ -192,6 +192,27 @@ class Go2Env:
             ),
         )
 
+        base_link = self.robot.get_link("base")
+        # self.imu_sensor = self.scene.add_sensor(IMUOptions(entity_idx=self.robot.idx, link_idx_local=base_link.idx_local,read_delay=0.02*2))
+        self.imu_sensor = self.scene.add_sensor(
+            gs.sensors.IMU(
+                entity_idx=self.robot.idx,
+                link_idx_local=base_link.idx_local,
+                pos_offset=(0.0, 0.0, 0.0),
+                magnetic_field=(0.5, 0.0, 0.0),
+                # sensor characteristics
+                acc_cross_axis_coupling=(0.0, 0.00, 0.00),
+                gyro_cross_axis_coupling=(0.00, 0.00, 0.00),
+                acc_noise=(0.0, 0.0, 0.0),
+                gyro_noise=(0.0, 0.0, 0.0),
+                acc_random_walk=(0.00, 0.00, 0.00),
+                gyro_random_walk=(0.00, 0.00, 0.00),
+                delay=0.0,
+                jitter=0.0,
+                interpolate=True,
+                draw_debug=True,
+            )
+        )
         # build
         self.scene.build(n_envs=num_envs)
 
@@ -232,7 +253,6 @@ class Go2Env:
         )
         self.extras = dict()  # extra information for logging
         self.extras["observations"] = dict()
-        self.last_joint_positions = None
 
     def reset(self):
         """Reset the environment to initial state"""
@@ -347,9 +367,29 @@ class GenesisSimNode(Node):
 
         self.imu_publisher = self.create_publisher(
             Float32MultiArray,
-            '/imu/data',
+            '/imu/data2',
             qos_profile=qos_profile
         )
+
+        self.imu_raw_publisher = self.create_publisher(
+            Float32MultiArray,
+            '/imu/data_raw2',
+            qos_profile=qos_profile
+        )
+
+        self.imu_raw_publisher2 = self.create_publisher(
+            Imu,
+            '/imu/data_raw',
+            qos_profile=qos_profile
+        )
+
+        self.magnetometer_publisher = self.create_publisher(
+            MagneticField,
+            '/imu/mag',
+            qos_profile=qos_profile
+        )
+
+        self.last_joint_positions = None
 
         gs.init()
         env_cfg, obs_cfg, reward_cfg, command_cfg = get_cfgs()
@@ -372,6 +412,11 @@ class GenesisSimNode(Node):
         imu_msg = Float32MultiArray()
         imu_msg.data = obs[0, 0:6].cpu().numpy().tolist()  # IMU data from observation
         self.imu_publisher.publish(imu_msg)
+
+        imu_raw_msg = Float32MultiArray()
+        imu_raw_msg.data = obs[0, 0:6].cpu().numpy().tolist()  # Raw IMU data from observation
+        self.imu_raw_publisher.publish(imu_raw_msg)
+
         joint_state_msg = JointState()
         joint_state_msg.header.stamp = self.get_clock().now().to_msg()
         joint_state_msg.name = self.env.env_cfg["joint_names"]
@@ -388,21 +433,67 @@ class GenesisSimNode(Node):
 
     def timer_callback(self):
         self.step_count += 1
+        # if self.step_count > 3000:
         obs, info = self.env.step(self.last_joint_positions)
         self.last_joint_positions = None  # Reset after use
         # Publish joint states
-        joint_state_msg = JointState()
-        joint_state_msg.header.stamp = self.get_clock().now().to_msg()
-        joint_state_msg.name = self.env.env_cfg["joint_names"]
-        joint_state_msg.position = obs[0, 9:21].cpu().numpy().tolist()  # Joint positions from observation
-        joint_state_msg.velocity = obs[0, 21:33].cpu().numpy().tolist()  # Joint velocities from observation
-        joint_state_msg.effort = []  # Effort not provided
-        self.joint_state_publisher.publish(joint_state_msg)
+        if self.step_count > 2000:
+            joint_state_msg = JointState()
+            joint_state_msg.header.stamp = self.get_clock().now().to_msg()
+            joint_state_msg.name = self.env.env_cfg["joint_names"]
+            joint_state_msg.position = obs[0, 9:21].cpu().numpy().tolist()  # Joint positions from observation
+            joint_state_msg.velocity = obs[0, 21:33].cpu().numpy().tolist()  # Joint velocities from observation
+            joint_state_msg.effort = []  # Effort not provided
+            self.joint_state_publisher.publish(joint_state_msg)
 
-        # Publish IMU data
-        imu_msg = Float32MultiArray()
-        imu_msg.data = obs[0, 0:6].cpu().numpy().tolist()  # IMU data from observation
-        self.imu_publisher.publish(imu_msg)
+                # Publish IMU data
+            imu_msg = Float32MultiArray()
+            imu_msg.data = obs[0, 0:6].cpu().numpy().tolist()  # IMU data from observation
+            self.imu_publisher.publish(imu_msg)
+
+
+            imu_reading = self.env.imu_sensor.read_ground_truth()
+            imu_reading_array = [imu_reading.ang_vel[0,0].item(),
+                                    imu_reading.ang_vel[0,1].item(),
+                                    imu_reading.ang_vel[0,2].item(),
+                                    imu_reading.lin_acc[0,0].item(),
+                                    imu_reading.lin_acc[0,1].item(),
+                                    imu_reading.lin_acc[0,2].item()]
+
+            imu_msg_raw = Float32MultiArray()
+            imu_msg_raw.data = imu_reading_array
+            self.imu_raw_publisher.publish(imu_msg_raw)
+
+            imu_msg_raw2 = Imu()
+            imu_msg_raw2.header.stamp = self.get_clock().now().to_msg()
+            imu_msg_raw2.header.frame_id = "imu"
+            imu_msg_raw2.angular_velocity.x = imu_reading.ang_vel[0, 0].item()
+            imu_msg_raw2.angular_velocity.y = imu_reading.ang_vel[0, 1].item()
+            imu_msg_raw2.angular_velocity.z = imu_reading.ang_vel[0, 2].item()
+            imu_msg_raw2.linear_acceleration.x = imu_reading.lin_acc[0, 0].item()
+            imu_msg_raw2.linear_acceleration.y = imu_reading.lin_acc[0, 1].item()
+            imu_msg_raw2.linear_acceleration.z = imu_reading.lin_acc[0, 2].item()
+            # imu_msg_raw2.orientation_covariance[0] = -1  # Indicates orientation is not provided
+            inv_base_quat = inv_quat(self.env.base_quat)
+            # imu_msg_raw2.orientation.x = inv_base_quat[0,1].item()
+            # imu_msg_raw2.orientation.y = inv_base_quat[0,2].item()
+            # imu_msg_raw2.orientation.z = inv_base_quat[0,3].item()
+            # imu_msg_raw2.orientation.w = inv_base_quat[0,0].item()
+            imu_msg_raw2.orientation.x = self.env.base_quat[0,1].item()
+            imu_msg_raw2.orientation.y = self.env.base_quat[0,2].item()
+            imu_msg_raw2.orientation.z = self.env.base_quat[0,3].item()
+            imu_msg_raw2.orientation.w = self.env.base_quat[0,0].item()
+            self.imu_raw_publisher2.publish(imu_msg_raw2)
+
+            # Publish magnetometer data
+            mag_msg = MagneticField()
+            mag_msg.header.stamp = self.get_clock().now().to_msg()
+            mag_msg.header.frame_id = "imu"
+            mag_msg.magnetic_field.x = imu_reading.mag[0, 0].item()
+            mag_msg.magnetic_field.y = imu_reading.mag[0, 1].item()
+            mag_msg.magnetic_field.z = imu_reading.mag[0, 2].item()
+            self.magnetometer_publisher.publish(mag_msg)
+
         # Log progress
         # if self.step_count % 50 == 0:  # Log every 50 steps
         #     self.get_logger().info(f'Step {self.step_count}: obs_size={len(obs[0].cpu().numpy().tolist())}, action_norm={torch.norm(self.last_joint_positions).item():.3f}')
